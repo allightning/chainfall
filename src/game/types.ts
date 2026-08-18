@@ -5,7 +5,7 @@ export const DX = [0, 1, 0, -1] as const;
 export const DY = [-1, 0, 1, 0] as const;
 export const DIR_NAME = ["北", "东", "南", "西"] as const;
 
-export type TileKind = "floor" | "void" | "laser" | "spring";
+export type TileKind = "floor" | "void" | "laser" | "spring" | "belt" | "repair" | "block" | "oil";
 export type EnemyKind =
   | "beetle"
   | "brute"
@@ -25,6 +25,7 @@ export interface Tile {
   collapseTurn: number;
   core: boolean;
   fire: boolean;
+  beltDir?: Dir;
 }
 
 export interface Unit {
@@ -40,6 +41,8 @@ export interface Unit {
   move: number;
   moved: boolean;
   acted: boolean;
+  /** 1=轻，2=重，3=超重。击退距离会按重量削减。 */
+  weight: number;
 }
 
 export interface Intent {
@@ -116,6 +119,8 @@ export interface Battle {
   title: string;
   chapter: number;
   id: string;
+  objective: "kill" | "hold";
+  spreading: boolean;
 }
 
 export type Action =
@@ -133,14 +138,14 @@ export interface SkillDef {
 export const SKILLS: Record<SkillId, SkillDef> = {
   punch: {
     id: "punch",
-    name: "铁拳",
+    name: "重拳",
     hint: "相邻一格，推 2 格",
     targeting: "dir",
   },
   cannon: {
     id: "cannon",
     name: "线炮",
-    hint: "直线上第一个单位，推 1 格",
+    hint: "直线 6 格内第一个单位，推 1 格",
     targeting: "dir",
   },
   pave: {
@@ -152,7 +157,7 @@ export const SKILLS: Record<SkillId, SkillDef> = {
   hook: {
     id: "hook",
     name: "钩索",
-    hint: "直线拉近第一个单位",
+    hint: "直线 7 格内，拉到身前；贴身则拽到身后",
     targeting: "dir",
   },
   stomp: {

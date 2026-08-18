@@ -30,8 +30,10 @@ import {
 import { CAMPAIGN } from "./game/missions";
 import type { Action, Battle, Ev, Pos, SkillId, Unit } from "./game/types";
 import { SKILLS } from "./game/types";
+import { fieldCoach, isTutorial, tutorialCoach, type CoachHint } from "./game/coach";
+import { inspectTile } from "./game/inspect";
 import { BoardView, drawTitleFx, loadArt } from "./render";
-import { sfx, toggleMute, unlockAudio } from "./game/audio";
+import { sfx, startAmbient, stopAmbient, toggleMute, unlockAudio } from "./game/audio";
 
 type Screen = "title" | "help" | "brief" | "combat" | "reward" | "shop" | "lost" | "won" | "event";
 
@@ -47,15 +49,16 @@ root.innerHTML = `
     <div class="center">
       <div class="kicker">ORBITAL TACTICS</div>
       <h1>连崩</h1>
-      <p class="sublead">看见红格，再动手。击退是伤害，地图会自己往下垮。预览等于结算。</p>
+      <p class="sublead">一座正在解体的轨道城。你带着三台机甲，在整条街区塌进深渊之前，把敌人推进黑洞、撞碎、钩回来。预览等于结算。</p>
       <div class="rules">
-        <div><b>上手</b>别站红格。点人选、点地走，点敌人就会推。Z 撤销。</div>
-        <div><b>爽点</b>把人推进坑、互相撞、送上将塌格。连锁会跳数字。</div>
-        <div><b>上限</b>弹簧、激光、炮台、拆楼机改整列。预览把整条链演完。</div>
-        <div><b>一局</b>四座城、商店、事件、遗物。结构条空了或全灭即失败。</div>
+        <div><b>战场</b>十二列宽的港、街、站、炉。金色格子是舰核，被打会掉结构。传送带、路障、维修垫都能用。</div>
+        <div><b>重量</b>重兵、监卫、拆楼机推不动两格。要借弹簧、互撞、钩索和将塌格。</div>
+        <div><b>补丁</b>钩索拉到身前；贴身则拽到身后。点敌人就会钩，铺路用来抢回落脚点。</div>
+        <div><b>撤离</b>有的节点只要守住核心撑过时限。结构空了或全灭即失败。</div>
       </div>
       <div class="row">
-        <button class="primary" id="btn-start">开始撤离</button>
+        <button class="primary" id="btn-start">开始教学</button>
+        <button id="btn-skip-tut">跳过教学</button>
         <button id="btn-help">作战手册</button>
       </div>
     </div>
@@ -64,8 +67,8 @@ root.innerHTML = `
     <div class="center stack">
       <div class="kicker">MANUAL</div>
       <h2>战场怎么读</h2>
-      <p>红格是敌人下一击，数字是那一回合结束会塌的地板。青格是移动范围，黄格是技能目标。悬停技能目标时，幽灵会告诉你谁会被推到哪、谁会掉下去。</p>
-      <p>铁腕近推两格。线炮打直线第一个人。补丁铺回坑/将塌格，也能把人钩过来。商店买遗物，战后三选一升级。事件会给你喘息或赌一把。</p>
+      <p>金色「舰核」是要守的心脏，打上去会扣顶部结构条。红格是敌人下一击，数字是那一回合结束会塌的地板。青格是移动范围，黄格是技能目标。把鼠标停在任何格子上，右侧「瞄准」会告诉你那是什么。</p>
+      <p>铁腕近推两格，但打不动超重单位那么远。线炮打直线第一个人。补丁默认钩索：拉到身前，贴身则拽到身后；铺路抢回坑和将塌格。有的节点是坚守到撤离窗口，不必杀光。</p>
       <p>1 / 2 / 3 选人 · Q / W 技能 · Z 撤销 · Esc 取消 · 空格结束回合 · M 静音</p>
       <div class="row"><button class="primary" id="btn-help-back">返回</button></div>
     </div>
@@ -108,11 +111,26 @@ root.innerHTML = `
         <div id="pilots"></div>
       </aside>
       <div class="table">
-        <div class="frame"><div id="board-wrap"><canvas id="board"></canvas></div></div>
+        <div class="board-slot">
+          <div class="frame"><div id="board-wrap"><canvas id="board"></canvas></div></div>
+        </div>
+        <div id="board-hint" class="board-hint"></div>
+        <aside id="coach" class="coach hidden">
+          <div class="coach-kicker">
+            <span id="coach-step">教学</span>
+            <button id="btn-coach-skip" class="ghost">跳过教学</button>
+          </div>
+          <h3 id="coach-title"></h3>
+          <p id="coach-body"></p>
+        </aside>
       </div>
       <aside class="tactics">
         <div class="side-label">战术</div>
         <div id="skills"></div>
+        <div id="inspect" class="inspect">
+          <b id="inspect-title">瞄准</b>
+          <p id="inspect-body">把鼠标放到格子或单位上，看它是什么。</p>
+        </div>
         <div class="row" style="margin-top:10px">
           <button id="btn-undo">撤销 Z</button>
           <button class="danger" id="btn-end">结束回合</button>
@@ -120,7 +138,17 @@ root.innerHTML = `
         <div class="log" id="log"></div>
       </aside>
     </div>
-    <div class="keys"><span id="keys-hint">点地移动 · 点敌人出技能 · 悬停即预览</span><span>空格结束回合</span></div>
+    <div class="keys">
+      <span id="keys-hint">点地移动 · 点敌人出手 · 悬停即预览</span>
+      <span class="legend">
+        <i class="lg-red"></i>将击
+        <i class="lg-cyan"></i>可走
+        <i class="lg-gold"></i>技能
+        <i class="lg-core"></i>舰核
+        <i class="lg-num"></i>将塌
+      </span>
+      <span>空格结束回合</span>
+    </div>
   </section>
   <section id="sc-reward" class="screen hidden">
     <div class="center">
@@ -192,6 +220,7 @@ let logLines: string[] = [];
 let pulse = 0;
 let lerpFrom: Record<string, Pos> = {};
 let lerpStart = 0;
+let fieldGuideDismissed = false;
 const titleFx = must<HTMLCanvasElement>("#title-fx");
 const chainPop = must("#chain-pop");
 
@@ -201,6 +230,8 @@ function show(next: Screen): void {
     screens[k].classList.toggle("hidden", k !== next);
   });
   must("#fx-wrap").classList.toggle("hidden", next === "combat");
+  if (next === "combat") startAmbient();
+  else stopAmbient();
 }
 
 function showErr(msg: string): void {
@@ -223,7 +254,21 @@ function setScreen(next: Screen): void {
 must("#btn-start").onclick = () => {
   unlockAudio();
   sfx.ui();
-  beginRun();
+  beginRun(false);
+};
+must("#btn-skip-tut").onclick = () => {
+  unlockAudio();
+  sfx.ui();
+  beginRun(true);
+};
+must("#btn-coach-skip").onclick = () => {
+  sfx.ui();
+  if (battle && isTutorial(battle)) skipTutorial();
+  else {
+    fieldGuideDismissed = true;
+    refreshCoach();
+    requestDraw();
+  }
 };
 must("#btn-help").onclick = () => {
   sfx.ui();
@@ -243,15 +288,24 @@ must("#btn-mute").onclick = () => {
   const m = toggleMute();
   must("#btn-mute").textContent = m ? "音效关" : "音效";
 };
-must("#btn-retry").onclick = () => beginRun();
-must("#btn-again").onclick = () => beginRun();
+must("#btn-retry").onclick = () => beginRun(false);
+must("#btn-again").onclick = () => beginRun(false);
 must("#btn-reward-skip").onclick = () => afterReward();
 must("#btn-shop-leave").onclick = () => leaveShop();
 
-function beginRun(): void {
+function beginRun(skipTut = false): void {
   run = newRun();
+  if (skipTut) run.node = 1;
   logLines = [];
   goNode();
+}
+
+function skipTutorial(): void {
+  if (!battle || !isTutorial(battle)) return;
+  afterBattle(run, battle);
+  const r = advance(run);
+  if (r === "won") finishWin();
+  else goNode();
 }
 
 function goNode(): void {
@@ -284,7 +338,7 @@ function openBrief(): void {
   must("#brief-kicker").textContent = `第 ${chapterOf(run)} 章 · ${ch?.name ?? ""} · ${n}/${CAMPAIGN.length}`;
   must("#brief-title").textContent = b.title;
   must("#brief-text").textContent = b.briefing;
-  must("#brief-meta").textContent = `${node?.type === "boss" ? "BOSS" : node?.type === "elite" ? "精英" : "战斗"} · 结构 ${b.structure} · ${b.maxTurns} 回合`;
+  must("#brief-meta").textContent = `${node?.type === "boss" ? "BOSS" : node?.type === "elite" ? "精英" : b.objective === "hold" ? "坚守" : "清场"} · 结构 ${b.structure} · ${b.maxTurns} 回合${b.spreading ? " · 崩塌蔓延" : ""}`;
   must("#brief-nodes").innerHTML = nodeDots();
   setScreen("brief");
 }
@@ -332,10 +386,22 @@ function openEvent(): void {
 
 function enterCombat(): void {
   if (!battle) return;
-  view.resize(battle.w, battle.h);
+  fieldGuideDismissed = false;
   refreshSide();
   setScreen("combat");
-  requestDraw();
+  const fit = () => {
+    if (!battle || screen !== "combat") return;
+    view.resize(battle.w, battle.h);
+    requestDraw();
+  };
+  requestAnimationFrame(() => requestAnimationFrame(fit));
+}
+
+function fitBoard(): void {
+  if (!battle || screen !== "combat") return;
+  const slot = canvas.closest(".board-slot") as HTMLElement | null;
+  if (slot && slot.clientWidth < 80) return;
+  view.resize(battle.w, battle.h);
 }
 
 function openShop(): void {
@@ -421,7 +487,7 @@ function requestDraw(): void {
 function refreshSide(): void {
   if (!battle) return;
   const b = battle;
-  must("#hud-mission").textContent = `${CHAPTERS[b.chapter - 1]?.name ?? ""} · ${b.title}`;
+  must("#hud-mission").textContent = isTutorial(b) ? "教学关" : `${CHAPTERS[b.chapter - 1]?.name ?? ""} · ${b.title}`;
   must("#hud-nodes").innerHTML = nodeDots();
   must("#hud-turn").textContent = `${b.turn} / ${b.maxTurns}`;
   const st = must("#hud-struct");
@@ -450,7 +516,7 @@ function refreshSide(): void {
     d.onclick = () => {
       if (u.hp <= 0) return;
       selected = u.id;
-      skill = null;
+      skill = u.pilot === "patch" ? "hook" : null;
       sfx.ui();
       refreshSide();
     };
@@ -483,6 +549,38 @@ function refreshSide(): void {
   log.scrollTop = log.scrollHeight;
   must<HTMLButtonElement>("#btn-undo").disabled = undo.length === 0;
   must<HTMLButtonElement>("#btn-end").disabled = b.outcome !== "ongoing";
+  must("#keys-hint").textContent = hoverHint();
+  refreshInspect();
+  refreshCoach();
+}
+
+function activeCoach(): CoachHint | null {
+  if (!battle || battle.outcome !== "ongoing") return null;
+  return tutorialCoach(battle, selected, hover) ?? fieldCoach(battle, fieldGuideDismissed);
+}
+
+function refreshInspect(): void {
+  if (!battle) return;
+  const info = inspectTile(battle, hover);
+  must("#inspect-title").textContent = info.title;
+  must("#inspect-body").textContent = info.body;
+}
+
+function refreshCoach(): void {
+  const el = must("#coach");
+  const hint = activeCoach();
+  if (!hint) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  el.dataset.color = hint.color;
+  must("#coach-step").textContent = hint.dismissOnly ? "战场说明" : `教学 ${hint.step} / ${hint.total}`;
+  must("#coach-title").textContent = hint.title;
+  must("#coach-body").textContent = hint.body;
+  must("#btn-coach-skip").textContent = hint.dismissOnly ? "知道了" : "跳过教学";
+  const end = must<HTMLButtonElement>("#btn-end");
+  if (!hint.dismissOnly) end.disabled = !hint.allowEnd;
 }
 
 function escapeHtml(s: string): string {
@@ -548,6 +646,14 @@ function undoMove(): void {
 }
 
 function tryEndTurn(): void {
+  if (battle && isTutorial(battle)) {
+    const hint = tutorialCoach(battle, selected, hover);
+    if (hint && !hint.allowEnd) {
+      showErr("先按教练说的做完这一步。");
+      sfx.ui();
+      return;
+    }
+  }
   commit({ type: "end" });
 }
 
@@ -577,6 +683,9 @@ function playEvents(events: Ev[]): void {
       view.float(ev.x, ev.y, `-${ev.dmg}`, "#ffd0cc");
     }
     if (ev.t === "move") sfx.move();
+    if (ev.t === "log" && (ev.s.includes("铁拳") || ev.s.includes("线炮") || ev.s.includes("钩索") || ev.s.includes("铺回") || ev.s.includes("震地"))) {
+      sfx.skill();
+    }
     if (ev.t === "die") {
       logLines.push(`${ev.name} 倒下`);
       view.burst(ev.x, ev.y, "#d05656", 16);
@@ -599,9 +708,11 @@ function afterEvents(): void {
   if (battle.outcome === "won") {
     sfx.win();
     afterBattle(run, battle);
+    const skipReward = isTutorial(battle);
     setTimeout(() => {
-      if (battle) openReward(battle);
-    }, 280);
+      if (skipReward) afterReward();
+      else if (battle) openReward(battle);
+    }, skipReward ? 700 : 280);
   } else if (battle.outcome === "lost") {
     loseNow(battle.loseReason);
   }
@@ -610,10 +721,14 @@ function afterEvents(): void {
 canvas.addEventListener("mousemove", (e) => {
   if (!battle || screen !== "combat") return;
   hover = view.tileAt(e.clientX, e.clientY, battle);
+  refreshInspect();
+  refreshCoach();
   requestDraw();
 });
 canvas.addEventListener("mouseleave", () => {
   hover = null;
+  refreshInspect();
+  refreshCoach();
   requestDraw();
 });
 canvas.addEventListener("click", (e) => {
@@ -625,10 +740,10 @@ canvas.addEventListener("click", (e) => {
   const occ = battle.units.find((u) => u.hp > 0 && u.x === p.x && u.y === p.y);
   if (occ?.team === "player") {
     selected = occ.id;
-    skill = null;
+    skill = occ.pilot === "patch" ? "hook" : null;
     refreshSide();
     requestDraw();
-    sfx.ui();
+    sfx.select();
     return;
   }
   const act = hoverAction();
@@ -697,14 +812,20 @@ window.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("resize", () => {
-  if (battle && screen === "combat") {
-    view.resize(battle.w, battle.h);
-    requestDraw();
-  }
+  fitBoard();
+  if (battle && screen === "combat") requestDraw();
 });
 
+const tableEl = canvas.closest(".table");
+if (tableEl && typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(() => {
+    fitBoard();
+    if (battle && screen === "combat") requestDraw();
+  }).observe(tableEl);
+}
+
 function currentTweens(): Record<string, { x: number; y: number }> {
-  const t = Math.min(1, (performance.now() - lerpStart) / 140);
+  const t = Math.min(1, (performance.now() - lerpStart) / 240);
   if (t >= 1 || !battle) return {};
   const e = t * t * (3 - 2 * t);
   const out: Record<string, { x: number; y: number }> = {};
@@ -719,6 +840,8 @@ function currentTweens(): Record<string, { x: number; y: number }> {
 
 function hoverHint(): string {
   if (!battle) return "";
+  const coach = tutorialCoach(battle, selected, hover);
+  if (coach) return coach.body;
   const u = selectedUnit();
   const act = hoverAction();
   if (act && act.type === "skill") {
@@ -731,9 +854,9 @@ function hoverHint(): string {
   }
   if (act && act.type === "move") return "移动到这里";
   if (skill) return "点黄格释放，右键取消";
-  if (u && !u.moved) return `${u.name} 可移动 · 点青格或点敌人出手`;
-  if (u && !u.acted) return `${u.name} 还可行动`;
-  return "空格结束回合 · 红格将落地";
+  if (u && !u.moved) return `${u.name} 可移动 · 点青格走动，或直接点敌人出手`;
+  if (u && !u.acted) return `${u.name} 还可行动 · 点敌人出手`;
+  return "空格结束回合 · 红格上的攻击会落地";
 }
 
 function frame(now: number): void {
@@ -746,6 +869,7 @@ function frame(now: number): void {
   if (!battle) return;
   const act = hoverAction();
   const preview = act ? previewAction(battle, act)?.next ?? null : null;
+  const coach = activeCoach();
   view.draw({
     battle,
     selected,
@@ -756,6 +880,10 @@ function frame(now: number): void {
     tweens: currentTweens(),
     pulse,
     hint: hoverHint(),
+    coachTiles: coach?.tiles,
+    coachColor: coach?.color,
   });
+  const hintEl = document.querySelector("#board-hint");
+  if (hintEl) hintEl.textContent = hoverHint();
 }
 requestAnimationFrame(frame);

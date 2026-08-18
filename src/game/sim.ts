@@ -28,14 +28,18 @@ function checkOutcome(b: Battle): void {
     b.loseReason = "核心被掏空";
     return;
   }
-  if (b.turn > b.maxTurns) {
-    b.outcome = "lost";
-    b.loseReason = "结构支撑超时";
-    return;
-  }
   const enemies = b.units.filter((u) => u.team === "enemy" && u.hp > 0);
   if (enemies.length === 0) {
     b.outcome = "won";
+    return;
+  }
+  if (b.turn > b.maxTurns) {
+    if (b.objective === "hold" && b.structure > 0 && players.length > 0) {
+      b.outcome = "won";
+      return;
+    }
+    b.outcome = "lost";
+    b.loseReason = b.objective === "hold" ? "未能守到撤离窗口" : "结构支撑超时";
   }
 }
 
@@ -85,6 +89,11 @@ function hitTile(b: Battle, x: number, y: number, dmg: number, events: Ev[]): vo
   events.push({ t: "hit", x, y, dmg });
 }
 
+function pushForce(u: Unit, dist: number): number {
+  const w = Math.max(1, u.weight || 1);
+  return Math.max(1, dist - (w - 1));
+}
+
 function pushUnit(
   b: Battle,
   u: Unit,
@@ -92,8 +101,9 @@ function pushUnit(
   dist: number,
   events: Ev[],
   depth: number,
+  passId?: string,
 ): void {
-  if (u.hp <= 0) return;
+  if (u.hp <= 0 || dist <= 0) return;
   let remaining = dist;
   let steps = 0;
   while (remaining > 0 && steps < PUSH_CAP && u.hp > 0) {
@@ -113,6 +123,7 @@ function pushUnit(
         }
       }
       b.chainPeak++;
+      resolveOverlap(b, u, events);
       return;
     }
     const t = tile(b, nx, ny);
@@ -124,8 +135,24 @@ function pushUnit(
       kill(b, u, "fall", events);
       return;
     }
+    if (t.kind === "block") {
+      const dmg = b.mods.slamDamage;
+      damage(b, u, dmg, events);
+      events.push({ t: "slam", id: u.id, x: u.x, y: u.y, dmg });
+      b.chainPeak++;
+      resolveOverlap(b, u, events);
+      return;
+    }
     const blocker = unitAt(b, nx, ny);
     if (blocker && blocker.id !== u.id) {
+      if (passId && blocker.id === passId) {
+        u.x = nx;
+        u.y = ny;
+        events.push({ t: "push", id: u.id, x: nx, y: ny });
+        b.chainPeak++;
+        if (t.kind === "spring" || t.kind === "oil") remaining++;
+        continue;
+      }
       const dmg = b.mods.slamDamage;
       damage(b, u, dmg, events);
       damage(b, blocker, dmg, events);
@@ -133,14 +160,51 @@ function pushUnit(
       events.push({ t: "log", s: `${u.name} 撞上 ${blocker.name}` });
       b.chainPeak++;
       if (depth < 6 && blocker.hp > 0) pushUnit(b, blocker, dir, 1, events, depth + 1);
+      resolveOverlap(b, u, events);
       return;
     }
     u.x = nx;
     u.y = ny;
     events.push({ t: "push", id: u.id, x: nx, y: ny });
     b.chainPeak++;
-    if (t.kind === "spring") remaining++;
+    if (t.kind === "spring" || t.kind === "oil") remaining++;
   }
+  resolveOverlap(b, u, events);
+}
+
+function resolveOverlap(b: Battle, u: Unit, events: Ev[]): void {
+  if (u.hp <= 0) return;
+  const stacked = b.units.find((x) => x.hp > 0 && x.id !== u.id && x.x === u.x && x.y === u.y);
+  if (!stacked) return;
+  for (let d = 0; d < 4; d++) {
+    const nx = u.x + DX[d];
+    const ny = u.y + DY[d];
+    const cell = tile(b, nx, ny);
+    if (!cell || cell.kind === "void" || cell.kind === "block") continue;
+    if (b.units.some((x) => x.hp > 0 && x.id !== u.id && x.x === nx && x.y === ny)) continue;
+    u.x = nx;
+    u.y = ny;
+    events.push({ t: "push", id: u.id, x: nx, y: ny });
+    return;
+  }
+}
+
+function pullToward(b: Battle, vic: Unit, caster: Unit, power: number, events: Ev[]): void {
+  const dir = cardinalDir(caster, vic);
+  if (dir === null) return;
+  const toward = (dir + 2) % 4;
+  const dist = Math.abs(vic.x - caster.x) + Math.abs(vic.y - caster.y);
+  const force = Math.max(1, power - Math.max(0, (vic.weight || 1) - 1));
+  if (dist <= 1) {
+    const pastX = caster.x + DX[toward];
+    const pastY = caster.y + DY[toward];
+    if (inb(b, pastX, pastY)) {
+      pushUnit(b, vic, toward, 2, events, 0, caster.id);
+    }
+    return;
+  }
+  const steps = Math.min(force, dist - 1);
+  pushUnit(b, vic, toward, steps, events, 0, caster.id);
 }
 
 function resetChain(b: Battle): void {
@@ -178,8 +242,11 @@ export function skillTargets(b: Battle, u: Unit, skill: SkillId): Pos[] {
       const x = u.x + DX[d];
       const y = u.y + DY[d];
       if (unitAt(b, x, y)) out.push({ x, y });
+    } else if (skill === "hook") {
+      const hit = firstInLine(b, u.x, u.y, d, 7);
+      if (hit) out.push({ x: hit.x, y: hit.y });
     } else {
-      const hit = firstInLine(b, u.x, u.y, d, 5);
+      const hit = firstInLine(b, u.x, u.y, d, 6);
       if (hit) out.push({ x: hit.x, y: hit.y });
     }
   }
@@ -193,7 +260,7 @@ export function skillsFor(u: Unit, unlocked: SkillId[]): SkillId[] {
     return s;
   }
   if (u.pilot === "line") return ["cannon"];
-  if (u.pilot === "patch") return ["pave", "hook"];
+  if (u.pilot === "patch") return ["hook", "pave"];
   return [];
 }
 
@@ -215,22 +282,21 @@ function applySkillInner(
     const vic = unitAt(b, tx, ty);
     if (!vic) return false;
     events.push({ t: "log", s: `${u.name} 铁拳 → ${vic.name}` });
-    pushUnit(b, vic, dir, 2 + b.mods.pushBonus, events, 0);
+    pushUnit(b, vic, dir, pushForce(vic, 2 + b.mods.pushBonus), events, 0);
   } else if (skill === "cannon") {
     const dir = cardinalDir(u, { x: tx, y: ty });
     if (dir === null) return false;
-    const vic = firstInLine(b, u.x, u.y, dir, 5);
+    const vic = firstInLine(b, u.x, u.y, dir, 6);
     if (!vic) return false;
     events.push({ t: "log", s: `${u.name} 线炮 → ${vic.name}` });
-    pushUnit(b, vic, dir, 1 + b.mods.pushBonus + b.mods.cannonPush, events, 0);
+    pushUnit(b, vic, dir, pushForce(vic, 1 + b.mods.pushBonus + b.mods.cannonPush), events, 0);
   } else if (skill === "hook") {
     const dir = cardinalDir(u, { x: tx, y: ty });
     if (dir === null) return false;
-    const vic = firstInLine(b, u.x, u.y, dir, 5);
+    const vic = firstInLine(b, u.x, u.y, dir, 7);
     if (!vic) return false;
-    const pull = (dir + 2) % 4;
     events.push({ t: "log", s: `${u.name} 钩索 → ${vic.name}` });
-    pushUnit(b, vic, pull, 2 + b.mods.pushBonus + b.mods.hookPush, events, 0);
+    pullToward(b, vic, u, 3 + b.mods.hookPush, events);
   } else if (skill === "pave") {
     const t = tile(b, tx, ty);
     if (!t) return false;
@@ -248,7 +314,7 @@ function applySkillInner(
     }
     for (const n of adj) {
       const dir = cardinalDir(u, n);
-      if (dir !== null) pushUnit(b, n, dir, 1 + b.mods.pushBonus, events, 0);
+      if (dir !== null) pushUnit(b, n, dir, pushForce(n, 1 + b.mods.pushBonus), events, 0);
     }
   } else {
     return false;
@@ -352,7 +418,7 @@ function nearestThreat(b: Battle, e: Unit): Pos {
   let bestD = 99;
   for (const u of b.units) {
     if (u.team !== "player" || u.hp <= 0) continue;
-    const d = Math.abs(u.x - e.x) + Math.abs(u.y - e.y);
+      const d = Math.abs(u.x - e.x) + Math.abs(u.y - e.y);
     if (d < bestD) {
       bestD = d;
       best = u;
@@ -361,7 +427,7 @@ function nearestThreat(b: Battle, e: Unit): Pos {
   for (let y = 0; y < b.h; y++) {
     for (let x = 0; x < b.w; x++) {
       if (!b.tiles[idx(b, x, y)].core) continue;
-      const d = Math.abs(x - e.x) + Math.abs(y - e.y);
+      const d = Math.abs(x - e.x) + Math.abs(y - e.y) - 1;
       if (d < bestD) {
         bestD = d;
         best = { x, y };
@@ -384,7 +450,7 @@ function enemyStep(b: Battle, e: Unit): void {
       const nx = e.x + DX[d];
       const ny = e.y + DY[d];
       const cell = tile(b, nx, ny);
-      if (!cell || cell.kind === "void") continue;
+      if (!cell || cell.kind === "void" || cell.kind === "block") continue;
       if (unitAt(b, nx, ny)) continue;
       e.x = nx;
       e.y = ny;
@@ -451,6 +517,83 @@ export function rebuildIntents(b: Battle): void {
   }
 }
 
+function spreadCracks(b: Battle, events: Ev[]): void {
+  if (!b.spreading) return;
+  const seen = new Set<string>();
+  for (let y = 0; y < b.h; y++) {
+    for (let x = 0; x < b.w; x++) {
+      if (b.tiles[idx(b, x, y)].kind !== "void") continue;
+      for (let d = 0; d < 4; d++) {
+        const nx = x + DX[d];
+        const ny = y + DY[d];
+        if (!inb(b, nx, ny)) continue;
+        const n = b.tiles[idx(b, nx, ny)];
+        if (n.kind === "void" || n.core || n.collapseTurn > 0) continue;
+        const key = `${nx},${ny}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        n.collapseTurn = b.turn + 1;
+      }
+    }
+  }
+  if (seen.size) events.push({ t: "log", s: `崩塌蔓延 ${seen.size} 格` });
+}
+
+function runBelts(b: Battle, events: Ev[]): void {
+  const list = b.units.filter((u) => u.hp > 0);
+  for (const u of list) {
+    if (u.hp <= 0) continue;
+    const t = tile(b, u.x, u.y);
+    if (!t || t.kind !== "belt" || t.beltDir === undefined) continue;
+    const dir = t.beltDir;
+    const nx = u.x + DX[dir];
+    const ny = u.y + DY[dir];
+    events.push({ t: "log", s: `传送带送走 ${u.name}` });
+    if (!inb(b, nx, ny)) {
+      const dmg = b.mods.slamDamage;
+      damage(b, u, dmg, events);
+      events.push({ t: "slam", id: u.id, x: u.x, y: u.y, dmg });
+      continue;
+    }
+    const dest = tile(b, nx, ny);
+    if (!dest || dest.kind === "void") {
+      u.x = nx;
+      u.y = ny;
+      kill(b, u, "fall", events);
+      continue;
+    }
+    if (dest.kind === "block" || !inb(b, nx, ny)) {
+      const dmg = b.mods.slamDamage;
+      damage(b, u, dmg, events);
+      events.push({ t: "slam", id: u.id, x: u.x, y: u.y, dmg });
+      continue;
+    }
+    const occ = unitAt(b, nx, ny);
+    if (occ && occ.id !== u.id) {
+      const dmg = b.mods.slamDamage;
+      damage(b, u, dmg, events);
+      damage(b, occ, dmg, events);
+      events.push({ t: "slam", id: u.id, x: u.x, y: u.y, dmg });
+      continue;
+    }
+    u.x = nx;
+    u.y = ny;
+    events.push({ t: "move", id: u.id, x: nx, y: ny });
+  }
+}
+
+function runRepair(b: Battle, events: Ev[]): void {
+  for (const u of b.units) {
+    if (u.hp <= 0 || u.team !== "player") continue;
+    const t = tile(b, u.x, u.y);
+    if (!t || t.kind !== "repair") continue;
+    if (u.hp >= u.maxHp) continue;
+    u.hp += 1;
+    events.push({ t: "log", s: `${u.name} 在维修垫上回复` });
+    events.push({ t: "hit", id: u.id, x: u.x, y: u.y, dmg: -1 });
+  }
+}
+
 export function endTurn(b: Battle): Ev[] {
   const events: Ev[] = [];
   if (b.outcome !== "ongoing") return events;
@@ -461,6 +604,9 @@ export function endTurn(b: Battle): Ev[] {
   lasers(b, events);
   fires(b, events);
   collapseNow(b, events);
+  spreadCracks(b, events);
+  runBelts(b, events);
+  runRepair(b, events);
   checkOutcome(b);
   if (b.outcome !== "ongoing") return events;
 

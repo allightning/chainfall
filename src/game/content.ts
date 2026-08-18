@@ -54,25 +54,25 @@ export const PILOT_BASE: Record<
 };
 
 export const CHAPTERS = [
-  { id: 1, name: "解体港", sub: "潮水般的甲板正在往下掉" },
-  { id: 2, name: "垂直街", sub: "激光巷和重锤同时朝你走" },
-  { id: 3, name: "镜面站", sub: "弹簧、折射、几乎没有落脚点" },
-  { id: 4, name: "炉心", sub: "两台拆楼机，没有退路" },
+  { id: 1, name: "解体港", sub: "整座码头正在从轨道上撕开" },
+  { id: 2, name: "垂直街", sub: "三十层高的巷战，激光在楼板间切开" },
+  { id: 3, name: "镜面站", sub: "弹簧把整列车厢弹进深渊" },
+  { id: 4, name: "炉心", sub: "最后的梁，两台拆楼机，没有退路" },
 ];
 
 export const ENEMY_BASE: Record<
   EnemyKind,
-  { name: string; hp: number; glyph: string }
+  { name: string; hp: number; glyph: string; weight: number }
 > = {
-  beetle: { name: "甲虫", hp: 1, glyph: "虫" },
-  brute: { name: "重兵", hp: 2, glyph: "兵" },
-  hammer: { name: "重锤", hp: 2, glyph: "锤" },
-  gunner: { name: "炮手", hp: 2, glyph: "炮" },
-  bomber: { name: "爆虫", hp: 1, glyph: "爆" },
-  demo: { name: "拆楼机", hp: 5, glyph: "拆" },
-  turret: { name: "炮台", hp: 2, glyph: "台" },
-  leaper: { name: "跃虫", hp: 1, glyph: "跃" },
-  warden: { name: "监卫", hp: 3, glyph: "卫" },
+  beetle: { name: "甲虫", hp: 1, glyph: "虫", weight: 1 },
+  brute: { name: "重兵", hp: 3, glyph: "兵", weight: 2 },
+  hammer: { name: "重锤", hp: 3, glyph: "锤", weight: 2 },
+  gunner: { name: "炮手", hp: 2, glyph: "炮", weight: 1 },
+  bomber: { name: "爆虫", hp: 1, glyph: "爆", weight: 1 },
+  demo: { name: "拆楼机", hp: 7, glyph: "拆", weight: 3 },
+  turret: { name: "炮台", hp: 3, glyph: "台", weight: 2 },
+  leaper: { name: "跃虫", hp: 2, glyph: "跃", weight: 1 },
+  warden: { name: "监卫", hp: 4, glyph: "卫", weight: 2 },
 };
 
 export interface PilotSave {
@@ -118,7 +118,22 @@ function parseMap(ascii: string): { tiles: Tile[]; w: number; h: number } {
       if (ch === "#") t.kind = "void";
       else if (ch === "L") t.kind = "laser";
       else if (ch === "S") t.kind = "spring";
-      else if (ch === "C") t.core = true;
+      else if (ch === "O") t.kind = "oil";
+      else if (ch === "R") t.kind = "repair";
+      else if (ch === "X") t.kind = "block";
+      else if (ch === ">") {
+        t.kind = "belt";
+        t.beltDir = 1;
+      } else if (ch === "<") {
+        t.kind = "belt";
+        t.beltDir = 3;
+      } else if (ch === "^") {
+        t.kind = "belt";
+        t.beltDir = 0;
+      } else if (ch === "v") {
+        t.kind = "belt";
+        t.beltDir = 2;
+      } else if (ch === "C") t.core = true;
       else if (ch >= "1" && ch <= "9") t.collapseTurn = Number(ch);
       tiles.push(t);
     }
@@ -140,7 +155,7 @@ export function createBattle(
     if (used.has(key)) throw new Error(`重叠放置 ${key} @ ${mission.id}`);
     if (x < 0 || y < 0 || x >= w || y >= h) throw new Error(`越界 ${key} @ ${mission.id}`);
     const t = tiles[y * w + x];
-    if (t.kind === "void") throw new Error(`坑上放人 ${key} @ ${mission.id}`);
+    if (t.kind === "void" || t.kind === "block") throw new Error(`不能放人 ${key} @ ${mission.id}`);
     used.add(key);
   };
 
@@ -161,6 +176,7 @@ export function createBattle(
       move: save.move,
       moved: false,
       acted: false,
+      weight: 1,
     });
   });
 
@@ -179,6 +195,7 @@ export function createBattle(
       move: 1,
       moved: false,
       acted: false,
+      weight: base.weight,
     });
   });
 
@@ -202,6 +219,8 @@ export function createBattle(
     title: mission.title,
     chapter: mission.chapter,
     id: mission.id,
+    objective: mission.objective ?? "kill",
+    spreading: mission.spreading ?? false,
   };
   rebuildIntents(battle);
   return battle;

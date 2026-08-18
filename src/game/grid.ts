@@ -49,7 +49,7 @@ export function cardinalDir(from: Pos, to: Pos): number | null {
 
 export function walkable(b: Battle, x: number, y: number, passer: Unit): boolean {
   const t = tile(b, x, y);
-  if (!t || t.kind === "void") return false;
+  if (!t || t.kind === "void" || t.kind === "block") return false;
   const u = unitAt(b, x, y);
   if (!u) return true;
   return u.team === passer.team && u.id !== passer.id;
@@ -103,7 +103,7 @@ export function firstInLine(
     cy += DY[dir];
     if (!inb(b, cx, cy)) return undefined;
     const t = tile(b, cx, cy);
-    if (!t || t.kind === "void") return undefined;
+    if (!t || t.kind === "void" || t.kind === "block") return undefined;
     const u = unitAt(b, cx, cy);
     if (u) return u;
   }

@@ -14,7 +14,7 @@ function assertSane(b: Battle, label: string): void {
     seen.add(key);
     const t = tile(b, u.x, u.y);
     if (!t) throw new Error(`${label} 越界 ${u.name}`);
-    if (t.kind === "void") throw new Error(`${label} ${u.name} 站在坑里`);
+    if (t.kind === "block") throw new Error(`${label} ${u.name} 站在路障上`);
   }
   if (Number.isNaN(b.structure)) throw new Error(`${label} 结构 NaN`);
 }
