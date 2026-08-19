@@ -46,45 +46,96 @@ function pal(chapter: number) {
 type Atlas = Record<string, CanvasImageSource>;
 const atlas: Atlas = {};
 let artReady = false;
+let artLoading: Promise<void> | null = null;
 
-function loadImg(src: string): Promise<HTMLImageElement> {
+type Raster = CanvasImageSource & { width: number; height: number };
+
+function rasterSize(im: CanvasImageSource): { w: number; h: number } {
+  if (im instanceof HTMLImageElement) {
+    return { w: im.naturalWidth || im.width, h: im.naturalHeight || im.height };
+  }
+  if ("width" in im && "height" in im) {
+    return { w: Number(im.width) || 0, h: Number(im.height) || 0 };
+  }
+  return { w: 0, h: 0 };
+}
+
+function assetUrl(path: string): string {
+  return new URL(path, document.baseURI).href;
+}
+
+async function loadRaster(path: string): Promise<Raster> {
+  const url = assetUrl(path);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(url);
+    const blob = await res.blob();
+    if (typeof createImageBitmap === "function") {
+      const bmp = await createImageBitmap(blob);
+      if (bmp.width > 1 && bmp.height > 1) return bmp;
+    }
+    const obj = URL.createObjectURL(blob);
+    try {
+      return await decodeImg(obj);
+    } finally {
+      URL.revokeObjectURL(obj);
+    }
+  } catch {
+    return decodeImg(url);
+  }
+}
+
+function decodeImg(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const im = new Image();
-    im.onload = () => resolve(im);
+    const done = () => {
+      if ((im.naturalWidth || im.width) > 1) resolve(im);
+      else reject(new Error(src));
+    };
+    im.onload = () => {
+      if (typeof im.decode === "function") {
+        void im.decode().then(done).catch(done);
+      } else done();
+    };
     im.onerror = () => reject(new Error(src));
     im.src = src;
   });
 }
 
-const BASE = import.meta.env.BASE_URL;
-
-function downscale(img: HTMLImageElement, maxDim: number): HTMLCanvasElement {
-  const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+function bake(img: CanvasImageSource, maxDim: number): HTMLCanvasElement {
+  const { w: iw, h: ih } = rasterSize(img);
+  const scale = Math.min(1, maxDim / Math.max(1, iw, ih));
   const c = document.createElement("canvas");
-  c.width = Math.max(1, Math.round(img.naturalWidth * scale));
-  c.height = Math.max(1, Math.round(img.naturalHeight * scale));
-  const ctx = c.getContext("2d");
-  if (!ctx) return c;
-  ctx.imageSmoothingQuality = "high";
+  c.width = Math.max(1, Math.round(iw * scale));
+  c.height = Math.max(1, Math.round(ih * scale));
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx || iw < 2 || ih < 2) return c;
+  ctx.imageSmoothingEnabled = true;
+  try {
+    ctx.imageSmoothingQuality = "high";
+  } catch {
+    /* ignore */
+  }
   ctx.drawImage(img, 0, 0, c.width, c.height);
   return c;
 }
 
-function punchBg(img: HTMLImageElement, maxDim = 384): HTMLCanvasElement {
-  const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
-  const c = document.createElement("canvas");
-  c.width = Math.max(1, Math.round(img.naturalWidth * scale));
-  c.height = Math.max(1, Math.round(img.naturalHeight * scale));
-  const ctx = c.getContext("2d");
-  if (!ctx) return c;
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(img, 0, 0, c.width, c.height);
-  const data = ctx.getImageData(0, 0, c.width, c.height);
+function punchBg(img: CanvasImageSource, maxDim = 384): HTMLCanvasElement {
+  const baked = bake(img, maxDim);
+  const ctx = baked.getContext("2d", { willReadFrequently: true });
+  if (!ctx || baked.width < 2 || baked.height < 2) return baked;
+  let data: ImageData;
+  try {
+    data = ctx.getImageData(0, 0, baked.width, baked.height);
+  } catch {
+    return baked;
+  }
   const d = data.data;
-  const w = c.width;
-  const h = c.height;
-  const dark = (i: number) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2] < 12;
+  const w = baked.width;
+  const h = baked.height;
+  const lum = (i: number) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+  // 只抠生成图四周的纯黑底，不碰机甲内部的深色金属。
+  const isMatte = (i: number) => lum(i) < 9 && d[i] < 14 && d[i + 1] < 14 && d[i + 2] < 14;
   const seen = new Uint8Array(w * h);
   const qx: number[] = [];
   const qy: number[] = [];
@@ -93,7 +144,7 @@ function punchBg(img: HTMLImageElement, maxDim = 384): HTMLCanvasElement {
     const p = y * w + x;
     if (seen[p]) return;
     const i = p * 4;
-    if (!dark(i)) return;
+    if (!isMatte(i)) return;
     seen[p] = 1;
     qx.push(x);
     qy.push(y);
@@ -116,18 +167,32 @@ function punchBg(img: HTMLImageElement, maxDim = 384): HTMLCanvasElement {
     push(x, y + 1);
     push(x, y - 1);
   }
-  for (let i = 0; i < d.length; i += 4) {
-    if (d[i + 3] === 0) continue;
-    const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-    if (l < 6) d[i + 3] = 0;
-    else if (l < 16) d[i + 3] = Math.round(((l - 6) / 10) * d[i + 3]);
+  const opaque = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return false;
+    return d[(y * w + x) * 4 + 3] > 0;
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (d[i + 3] === 0) continue;
+      const nearHole =
+        !opaque(x + 1, y) || !opaque(x - 1, y) || !opaque(x, y + 1) || !opaque(x, y - 1);
+      if (!nearHole) continue;
+      const l = lum(i);
+      if (l < 14) d[i + 3] = 0;
+      else if (l < 28) d[i + 3] = Math.round(((l - 14) / 14) * d[i + 3]);
+    }
   }
+  let kept = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] > 24) kept++;
+  if (kept < w * h * 0.04) return baked;
   ctx.putImageData(data, 0, 0);
-  return c;
+  return baked;
 }
 
 export function loadArt(): Promise<void> {
   if (artReady) return Promise.resolve();
+  if (artLoading) return artLoading;
   const tiles = ["floor", "void", "core", "laser", "spring", "crack"];
   const units = [
     "iron",
@@ -149,25 +214,26 @@ export function loadArt(): Promise<void> {
     "brood",
     "bully",
   ];
-  return Promise.allSettled([
+  artLoading = Promise.allSettled([
     ...tiles.map((k) =>
-      loadImg(`${BASE}assets/tile-${k}.png`).then((im) => {
+      loadRaster(`assets/tile-${k}.png`).then((im) => {
         atlas[`tile-${k}`] =
-          k === "floor" || k === "void" ? downscale(im, k === "floor" ? 1024 : 768) : punchBg(im, 320);
+          k === "floor" || k === "void" ? bake(im, k === "floor" ? 1024 : 768) : punchBg(im, 320);
       }),
     ),
     ...units.map((k) =>
-      loadImg(`${BASE}assets/unit-${k}.png`).then((im) => {
+      loadRaster(`assets/unit-${k}.png`).then((im) => {
         atlas[`unit-${k}`] = punchBg(im);
       }),
     ),
-    loadImg(`${BASE}assets/bg-title.jpg`).then((im) => {
+    loadRaster("assets/bg-title.jpg").then((im) => {
       atlas.bg = im;
     }),
-  ])
-    .then(() => {
-      artReady = true;
-    });
+  ]).then(() => {
+    artReady = true;
+    artLoading = null;
+  });
+  return artLoading;
 }
 
 function blit(
@@ -195,9 +261,11 @@ function blitCover(
   oy: number,
 ): boolean {
   const im = atlas[key];
-  if (!im || !("width" in im)) return false;
-  const iw = Math.max(1, (im as HTMLImageElement).width || 1);
-  const ih = Math.max(1, (im as HTMLImageElement).height || 1);
+  if (!im) return false;
+  const { w: iw0, h: ih0 } = rasterSize(im);
+  if (iw0 < 2 || ih0 < 2) return false;
+  const iw = iw0;
+  const ih = ih0;
   let sx = ((Math.floor(ox) % iw) + iw) % iw;
   let sy = ((Math.floor(oy) % ih) + ih) % ih;
   const sw = Math.min(w, iw - sx);
@@ -262,6 +330,8 @@ export class BoardView {
     this.canvas.width = Math.floor(pw * dpr);
     this.canvas.height = Math.floor(ph * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = "high";
   }
 
   tileAt(clientX: number, clientY: number, b: Battle): Pos | null {
@@ -311,6 +381,7 @@ export class BoardView {
 
     const { battle: b } = o;
     const c = this.ctx;
+    c.imageSmoothingEnabled = true;
     const s = this.cell;
     const p = pal(b.chapter);
     const sx = (Math.random() - 0.5) * this.shakeAmt;
@@ -737,9 +808,10 @@ export function drawTitleFx(canvas: HTMLCanvasElement, t: number): void {
   }
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   const bg = atlas.bg;
-  if (bg && "width" in bg) {
-    const iw = (bg as HTMLImageElement).width || 1600;
-    const ih = (bg as HTMLImageElement).height || 900;
+  if (bg) {
+    const size = rasterSize(bg);
+    const iw = size.w || 1600;
+    const ih = size.h || 900;
     const scale = Math.max(w / iw, h / ih) * 1.04;
     const dw = iw * scale;
     const dh = ih * scale;
