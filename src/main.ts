@@ -33,7 +33,7 @@ import {
 } from "./game/run";
 import type { Action, Battle, Ev, Pos, SkillId, Unit } from "./game/types";
 import { SKILLS } from "./game/types";
-import { fieldCoach, isTutorial, tutorialCoach, type CoachHint } from "./game/coach";
+import { fieldCoach, isTutorial, tutorialCoach, advanceTutorial, tutorialBlocks, tutorialMaySelect, tutorialDesiredSkill, type CoachHint } from "./game/coach";
 import { inspectTile } from "./game/inspect";
 import { BoardView, drawTitleFx, loadArt } from "./render";
 import { sfx, startAmbient, stopAmbient, toggleMute, unlockAudio } from "./game/audio";
@@ -46,6 +46,7 @@ const root = found;
 
 root.innerHTML = `
   <div id="err" class="err hidden"></div>
+  <div id="tut-nudge" class="tut-nudge hidden">请按提示词走</div>
   <div id="chain-pop" class="chain-pop hidden">连锁</div>
   <div class="title-bg" id="fx-wrap"><canvas id="title-fx"></canvas></div>
   <section id="sc-title" class="screen">
@@ -57,7 +58,7 @@ root.innerHTML = `
         <div><b>火力</b>重拳、线炮、钩索都会造成伤害。击退只是附带，用来改写站位、送人进坑或对撞。</div>
         <div><b>舰核</b>金色舰核就在小队前方，通常只有两格。敌人打上去会扣结构，结构掉光就失败。全灭同样失败。</div>
         <div><b>红区</b>敌人下一击会亮红。招式各不相同：啃咬、横扫、穿甲、切割梁、酸蚀、曲射、压制……</div>
-        <div><b>航路</b>先打码头缺口，摸清战场记号。之后改装会给出组合技和机制，交易所稍后才会出现。</div>
+        <div><b>航路</b>先完成港区接舷。调度会带你过三人技能、结构、结束回合和废料改装。失败从接舷重新开始。</div>
       </div>
       <div class="row">
         <button class="primary" id="btn-start">出航</button>
@@ -115,20 +116,21 @@ root.innerHTML = `
         <div id="pilots"></div>
       </aside>
       <div class="table">
+        <div id="board-cue" class="board-cue hidden">请根据右上角提示词行动</div>
         <div class="board-slot">
           <div class="frame"><div id="board-wrap"><canvas id="board"></canvas></div></div>
         </div>
-        <div id="board-hint" class="board-hint"></div>
-        <aside id="coach" class="coach hidden">
+      </div>
+      <aside class="tactics">
+        <div id="coach" class="coach hidden">
           <div class="coach-kicker">
             <span id="coach-step">教学</span>
-            <button id="btn-coach-skip" class="ghost">跳过教学</button>
+            <button id="btn-coach-skip" class="ghost">下一步</button>
           </div>
           <h3 id="coach-title"></h3>
           <p id="coach-body"></p>
-        </aside>
-      </div>
-      <aside class="tactics">
+        </div>
+        <div class="tactics-body">
         <div class="side-label">战术</div>
         <div id="skills"></div>
         <div id="inspect" class="inspect">
@@ -140,6 +142,7 @@ root.innerHTML = `
           <button class="danger" id="btn-end">结束回合</button>
         </div>
         <div class="log" id="log"></div>
+        </div>
       </aside>
     </div>
     <div class="keys">
@@ -177,7 +180,8 @@ root.innerHTML = `
       <div class="kicker">HULL BREACH</div>
       <h2>结构崩溃</h2>
       <p id="lost-text"></p>
-      <button class="primary" id="btn-retry">再来一局</button>
+      <p class="brief-meta">结构崩溃后整局结束。再来一局会从港区接舷重新开始。</p>
+      <button class="primary" id="btn-retry">从接舷重新开始</button>
     </div>
   </section>
   <section id="sc-won" class="screen hidden">
@@ -209,6 +213,8 @@ function must<T extends HTMLElement>(sel: string): T {
 }
 
 const errEl = must<HTMLDivElement>("#err");
+const nudgeEl = must<HTMLDivElement>("#tut-nudge");
+let nudgeTimer = 0;
 const canvas = must<HTMLCanvasElement>("#board");
 const view = new BoardView(canvas);
 void loadArt();
@@ -244,6 +250,12 @@ function showErr(msg: string): void {
   setTimeout(() => errEl.classList.add("hidden"), 4000);
 }
 
+function showTutNudge(): void {
+  nudgeEl.classList.remove("hidden");
+  window.clearTimeout(nudgeTimer);
+  nudgeTimer = window.setTimeout(() => nudgeEl.classList.add("hidden"), 3000);
+}
+
 window.addEventListener("error", (e) => showErr(e.message || "未知错误"));
 window.addEventListener("unhandledrejection", (e) => {
   const r = e.reason;
@@ -267,12 +279,18 @@ must("#btn-skip-tut").onclick = () => {
 };
 must("#btn-coach-skip").onclick = () => {
   sfx.ui();
-  if (battle && isTutorial(battle)) skipTutorial();
-  else {
-    fieldGuideDismissed = true;
-    refreshCoach();
-    requestDraw();
+  if (battle && isTutorial(battle)) {
+    const hint = tutorialCoach(battle, selected, hover);
+    if (hint?.mode === "next") {
+      advanceTutorial(battle);
+      refreshSide();
+      requestDraw();
+    }
+    return;
   }
+  fieldGuideDismissed = true;
+  refreshCoach();
+  requestDraw();
 };
 must("#btn-help").onclick = () => {
   sfx.ui();
@@ -307,15 +325,8 @@ function beginRun(skipTut = false): void {
     if (first) selectOffer(run, first);
   }
   logLines = [];
+  fieldGuideDismissed = false;
   goNode();
-}
-
-function skipTutorial(): void {
-  if (!battle || !isTutorial(battle)) return;
-  afterBattle(run, battle);
-  const r = completeCurrent(run);
-  if (r === "won") finishWin();
-  else goNode();
 }
 
 function goNode(): void {
@@ -454,7 +465,9 @@ function fitBoard(): void {
 function openShop(): void {
   const cost = shopCost(run);
   const choices = shopChoices(run);
-  must("#shop-sub").textContent = `废料 ${run.scrap} · 改装每件 ${cost} · 接合 8 废料`;
+  must("#shop-sub").textContent = run.introShop
+    ? `接舷拆下的废料可以在这里换遗物。每件 ${cost} 废料，会改这一局的规则。买不起就离开。现有 ${run.scrap}。`
+    : `废料 ${run.scrap} · 改装每件 ${cost} · 接合 8 废料`;
   const box = must("#shop-cards");
   box.innerHTML = "";
   const repair = document.createElement("button");
@@ -497,7 +510,11 @@ function leaveShop(): void {
 }
 
 function openReward(b: Battle): void {
-  must("#reward-sub").textContent = `本战废料 +${b.scrap} · 现有 ${run.scrap}`;
+  const intro = b.id === "tut-1";
+  must("#reward-sub").textContent = intro
+    ? `本战废料 +${b.scrap}，现有 ${run.scrap}。选一张带走：组合技改打法，机制给新规则，改装加生命、伤害或移动。`
+    : `本战废料 +${b.scrap} · 现有 ${run.scrap}`;
+  must("#btn-reward-skip").classList.toggle("hidden", intro);
   const box = must("#reward-cards");
   box.innerHTML = "";
   const choices = rewardChoices(run);
@@ -586,6 +603,11 @@ function refreshSide(): void {
       <div class="pips-act"><span class="${u.moved ? "" : "on"}">${mv}</span><span class="${u.acted ? "" : "on"}">${ac}</span></div>`;
     d.onclick = () => {
       if (u.hp <= 0) return;
+      if (battle && isTutorial(battle) && !tutorialMaySelect(battle, u.id)) {
+        showTutNudge();
+        sfx.ui();
+        return;
+      }
       selected = u.id;
       skill = u.pilot === "patch" ? "hook" : null;
       sfx.ui();
@@ -597,6 +619,10 @@ function refreshSide(): void {
   sk.innerHTML = "";
   const u = selectedUnit();
   const unlocked = unlockedSkills(run);
+  if (battle && isTutorial(battle)) {
+    const want = tutorialDesiredSkill(battle, selected);
+    if (want) skill = want;
+  }
   if (u && u.hp > 0) {
     for (const id of skillsFor(u, unlocked)) {
       const def = SKILLS[id];
@@ -640,16 +666,36 @@ function refreshInspect(): void {
 function refreshCoach(): void {
   const el = must("#coach");
   const hint = activeCoach();
+  const struct = must("#hud-struct");
+  const scrap = must("#hud-scrap");
+  const turn = must("#hud-turn");
+  struct.classList.remove("hud-pulse");
+  scrap.classList.remove("hud-pulse");
+  turn.classList.remove("hud-pulse");
   if (!hint) {
     el.classList.add("hidden");
+    must("#board-cue").classList.add("hidden");
     return;
   }
   el.classList.remove("hidden");
+  must("#board-cue").classList.remove("hidden");
   el.dataset.color = hint.color;
   must("#coach-step").textContent = hint.dismissOnly ? "战场说明" : `调度 ${hint.step} / ${hint.total}`;
   must("#coach-title").textContent = hint.title;
   must("#coach-body").textContent = hint.body;
-  must("#btn-coach-skip").textContent = hint.dismissOnly ? "收到" : "切断频道";
+  const skip = must<HTMLButtonElement>("#btn-coach-skip");
+  if (hint.mode === "next") {
+    skip.classList.remove("hidden");
+    skip.textContent = "下一步";
+  } else if (hint.dismissOnly) {
+    skip.classList.remove("hidden");
+    skip.textContent = "收到";
+  } else {
+    skip.classList.add("hidden");
+  }
+  if (hint.hud === "struct") struct.classList.add("hud-pulse");
+  if (hint.hud === "scrap") scrap.classList.add("hud-pulse");
+  if (hint.hud === "turn") turn.classList.add("hud-pulse");
   const end = must<HTMLButtonElement>("#btn-end");
   if (!hint.dismissOnly) end.disabled = !hint.allowEnd;
 }
@@ -694,6 +740,14 @@ function hoverAction(): Action | null {
 
 function commit(action: Action): void {
   if (!battle || battle.outcome !== "ongoing") return;
+  if (isTutorial(battle)) {
+    const blocked = tutorialBlocks(battle, selected, action);
+    if (blocked) {
+      showTutNudge();
+      sfx.ui();
+      return;
+    }
+  }
   const snap = cloneBattle(battle);
   const events = applyAction(battle, action);
   if (!events) return;
@@ -720,7 +774,7 @@ function tryEndTurn(): void {
   if (battle && isTutorial(battle)) {
     const hint = tutorialCoach(battle, selected, hover);
     if (hint && !hint.allowEnd) {
-      showErr("调度还在等铁腕完成当前动作。");
+      showTutNudge();
       sfx.ui();
       return;
     }
@@ -779,11 +833,9 @@ function afterEvents(): void {
   if (battle.outcome === "won") {
     sfx.win();
     afterBattle(run, battle);
-    const skipReward = isTutorial(battle);
     setTimeout(() => {
-      if (skipReward) afterReward();
-      else if (battle) openReward(battle);
-    }, skipReward ? 700 : 280);
+      if (battle) openReward(battle);
+    }, 280);
   } else if (battle.outcome === "lost") {
     loseNow(battle.loseReason);
   }
@@ -810,6 +862,11 @@ canvas.addEventListener("click", (e) => {
   hover = p;
   const occ = battle.units.find((u) => u.hp > 0 && u.x === p.x && u.y === p.y);
   if (occ?.team === "player") {
+    if (isTutorial(battle) && !tutorialMaySelect(battle, occ.id)) {
+      showTutNudge();
+      sfx.ui();
+      return;
+    }
     selected = occ.id;
     skill = occ.pilot === "patch" ? "hook" : null;
     refreshSide();
@@ -859,6 +916,10 @@ window.addEventListener("keydown", (e) => {
       const ps = battle?.units.filter((u) => u.team === "player") ?? [];
       const u = ps[Number(e.key) - 1];
       if (u && u.hp > 0) {
+        if (battle && isTutorial(battle) && !tutorialMaySelect(battle, u.id)) {
+          showTutNudge();
+          return;
+        }
         selected = u.id;
         skill = null;
         refreshSide();
@@ -911,8 +972,6 @@ function currentTweens(): Record<string, { x: number; y: number }> {
 
 function hoverHint(): string {
   if (!battle) return "";
-  const coach = tutorialCoach(battle, selected, hover);
-  if (coach) return coach.body;
   const u = selectedUnit();
   const act = hoverAction();
   if (act && act.type === "skill") {
@@ -954,7 +1013,5 @@ function frame(now: number): void {
     coachTiles: coach?.tiles,
     coachColor: coach?.color,
   });
-  const hintEl = document.querySelector("#board-hint");
-  if (hintEl) hintEl.textContent = hoverHint();
 }
 requestAnimationFrame(frame);

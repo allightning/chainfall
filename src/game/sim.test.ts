@@ -11,7 +11,7 @@ import {
 } from "./sim";
 import { inspectTile } from "./inspect";
 import type { Battle } from "./types";
-import { fillOffers, newRun, rewardChoices, startMain, upgradeById } from "./run";
+import { fillOffers, newRun, rewardChoices, startMain, upgradeById, completeCurrent } from "./run";
 
 function battleOf(id: string): Battle {
   const m = MISSIONS.find((x) => x.id === id);
@@ -55,6 +55,21 @@ describe("航路", () => {
     fillOffers(run);
     expect(run.offers.some((o) => o.type === "shop" || o.type === "event")).toBe(false);
     expect(run.offers.every((o) => o.type === "fight")).toBe(true);
+  });
+
+  it("接舷之后先去交易所再进码头缺口", () => {
+    const run = newRun(7);
+    run.tut = true;
+    fillOffers(run);
+    expect(run.offers[0]?.missionId).toBe("tut-1");
+    run.current = run.offers[0]!;
+    const r = completeCurrent(run);
+    expect(r).toBe("next");
+    expect(run.introShop).toBe(true);
+    expect(run.offers[0]?.type).toBe("shop");
+    run.current = run.offers[0]!;
+    completeCurrent(run);
+    expect(run.offers[0]?.missionId).toBe("c1-1");
   });
 });
 
@@ -179,18 +194,20 @@ describe("回合结束", () => {
 });
 
 describe("教学关", () => {
-  it("铁腕从西侧一拳打死甲虫", () => {
+  it("铁腕从西侧一拳打不穿加厚甲虫", () => {
     const b = battleOf("tut-1");
     const iron = b.units.find((u) => u.id === "iron")!;
     expect(iron.x).toBe(1);
-    expect(iron.y).toBe(4);
-    const mv = applyAction(b, { type: "move", id: "iron", x: 1, y: 1 });
-    expect(mv).toBeTruthy();
-    const ev = applyAction(b, { type: "skill", id: "iron", skill: "punch", tx: 2, ty: 1 });
-    expect(ev).toBeTruthy();
+    expect(iron.y).toBe(3);
     const beetle = b.units.find((u) => u.enemy === "beetle")!;
-    expect(beetle.hp).toBe(0);
-    expect(b.outcome).toBe("won");
+    expect(beetle.hp).toBe(6);
+    const mv = applyAction(b, { type: "move", id: "iron", x: 2, y: 2 });
+    expect(mv).toBeTruthy();
+    const ev = applyAction(b, { type: "skill", id: "iron", skill: "punch", tx: 3, ty: 2 });
+    expect(ev).toBeTruthy();
+    expect(beetle.hp).toBe(4);
+    expect(b.outcome).toBe("ongoing");
+    assertSane(b);
   });
 });
 

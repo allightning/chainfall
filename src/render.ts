@@ -389,21 +389,14 @@ export class BoardView {
           c.lineWidth = 3;
           round(c, x * s + 2, y * s + 2, s - 4, s - 4, 6);
           c.stroke();
-          const ay = y * s - 4 + Math.sin(o.pulse * 2) * 3;
+          const ay = y * s - 14 + Math.sin(o.pulse * 2) * 2;
           c.fillStyle = `rgba(${col},0.95)`;
           c.beginPath();
-          c.moveTo(x * s + s / 2, ay + 10);
-          c.lineTo(x * s + s / 2 - 7, ay);
-          c.lineTo(x * s + s / 2 + 7, ay);
+          c.moveTo(x * s + s / 2, ay + 8);
+          c.lineTo(x * s + s / 2 - 6, ay);
+          c.lineTo(x * s + s / 2 + 6, ay);
           c.closePath();
           c.fill();
-          if (o.coachColor === "cyan") {
-            c.font = `700 ${Math.max(10, Math.floor(s * 0.16))}px "Noto Sans SC", sans-serif`;
-            c.textAlign = "center";
-            c.textBaseline = "top";
-            c.fillStyle = "#f4fbff";
-            c.fillText("点这里", x * s + s / 2, y * s + s - 16);
-          }
         }
       }
     }

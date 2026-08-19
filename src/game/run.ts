@@ -15,6 +15,7 @@ export interface RunState {
   seed: number;
   chapter: number;
   tut: boolean;
+  introShop: boolean;
   fightsDone: number;
   elitesDone: number;
   shopsDone: number;
@@ -89,6 +90,7 @@ export function newRun(seed = Date.now() % 1_000_000): RunState {
     seed,
     chapter: 1,
     tut: true,
+    introShop: false,
     fightsDone: 0,
     elitesDone: 0,
     shopsDone: 0,
@@ -107,6 +109,7 @@ export function newRun(seed = Date.now() % 1_000_000): RunState {
 
 export function startMain(run: RunState): void {
   run.tut = false;
+  run.introShop = false;
   run.current = null;
   fillOffers(run);
 }
@@ -237,6 +240,7 @@ export function startBattle(run: RunState): Battle {
 
 export function afterBattle(run: RunState, battle: Battle): void {
   run.scrap += battle.scrap;
+  if (run.tut && battle.id === "tut-1") run.scrap += 10;
   run.wins += 1;
   for (const p of run.pilots) {
     const live = battle.units.find((u) => u.id === p.id);
@@ -260,6 +264,19 @@ export function completeCurrent(run: RunState): "won" | "next" {
   if (cur) {
     if (run.tut && cur.missionId === "tut-1") {
       run.tut = false;
+      run.introShop = true;
+      run.current = null;
+      run.offers = [
+        {
+          type: "shop",
+          title: "废料交易所",
+          blurb: "接舷拆下的零件可以换改装。买一件带走，或先离开。",
+        },
+      ];
+      return "next";
+    }
+    if (run.introShop && cur.type === "shop") {
+      run.introShop = false;
       run.current = null;
       fillOffers(run);
       return "next";

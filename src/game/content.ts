@@ -293,6 +293,7 @@ export function createBattle(
   mission.enemies.forEach((e, i) => {
     place(e.x, e.y);
     const base = ENEMY_BASE[e.kind];
+    const hp = e.hp ?? base.hp;
     units.push({
       id: `e${i}`,
       team: "enemy",
@@ -300,8 +301,8 @@ export function createBattle(
       name: base.name,
       x: e.x,
       y: e.y,
-      hp: base.hp,
-      maxHp: base.hp,
+      hp,
+      maxHp: hp,
       move: 1,
       moved: false,
       acted: false,
@@ -341,6 +342,7 @@ export function createBattle(
     volleyUsed: false,
     pulseUsed: false,
     relayUsed: false,
+    tutBeat: 0,
   };
   if (mods.shieldStart > 0) {
     for (const u of units) {

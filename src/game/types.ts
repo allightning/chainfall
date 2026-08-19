@@ -222,6 +222,7 @@ export interface Battle {
   volleyUsed: boolean;
   pulseUsed: boolean;
   relayUsed: boolean;
+  tutBeat: number;
 }
 
 export type Action =
