@@ -103,9 +103,34 @@ export function firstInLine(
     cy += DY[dir];
     if (!inb(b, cx, cy)) return undefined;
     const t = tile(b, cx, cy);
-    if (!t || t.kind === "void" || t.kind === "block") return undefined;
+    if (!t || t.kind === "block") return undefined;
     const u = unitAt(b, cx, cy);
     if (u) return u;
   }
   return undefined;
+}
+
+export function tilesAlong(
+  b: Battle,
+  x: number,
+  y: number,
+  dir: number,
+  max: number,
+  opts?: { stopBlock?: boolean; skipVoid?: boolean },
+): Pos[] {
+  const out: Pos[] = [];
+  let cx = x;
+  let cy = y;
+  for (let i = 0; i < max; i++) {
+    cx += DX[dir];
+    cy += DY[dir];
+    if (!inb(b, cx, cy)) break;
+    const t = tile(b, cx, cy);
+    if (!t) break;
+    if (t.kind === "void" && opts?.skipVoid) continue;
+    if (t.kind === "void") break;
+    out.push({ x: cx, y: cy });
+    if (opts?.stopBlock !== false && t.kind === "block") break;
+  }
+  return out;
 }

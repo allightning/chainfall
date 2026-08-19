@@ -8,18 +8,22 @@ import {
 } from "./game/sim";
 import { cloneBattle } from "./game/grid";
 import {
-  advance,
   afterBattle,
   buyRelic,
+  buyRepair,
   chapterOf,
+  chapterProgress,
+  completeCurrent,
   currentNode,
-  healShop,
+  fillOffers,
   newRun,
   relicById,
   rewardChoices,
+  selectOffer,
   shopChoices,
   shopCost,
   startBattle,
+  startMain,
   unlockedSkills,
   upgradeById,
   applyUpgrade,
@@ -27,7 +31,6 @@ import {
   eventById,
   type RunState,
 } from "./game/run";
-import { CAMPAIGN } from "./game/missions";
 import type { Action, Battle, Ev, Pos, SkillId, Unit } from "./game/types";
 import { SKILLS } from "./game/types";
 import { fieldCoach, isTutorial, tutorialCoach, type CoachHint } from "./game/coach";
@@ -49,16 +52,16 @@ root.innerHTML = `
     <div class="center">
       <div class="kicker">ORBITAL TACTICS</div>
       <h1>连崩</h1>
-      <p class="sublead">一座正在解体的轨道城。你带着三台机甲，在整条街区塌进深渊之前，把敌人推进黑洞、撞碎、钩回来。预览等于结算。</p>
+      <p class="sublead">轨道城正在解体。三台机甲，一块舰核。打穿甲壳，躲开红区，在整条街区塌进深渊之前撤离。</p>
       <div class="rules">
-        <div><b>战场</b>十二列宽的港、街、站、炉。金色格子是舰核，被打会掉结构。传送带、路障、维修垫都能用。</div>
-        <div><b>重量</b>重兵、监卫、拆楼机推不动两格。要借弹簧、互撞、钩索和将塌格。</div>
-        <div><b>补丁</b>钩索拉到身前；贴身则拽到身后。点敌人就会钩，铺路用来抢回落脚点。</div>
-        <div><b>撤离</b>有的节点只要守住核心撑过时限。结构空了或全灭即失败。</div>
+        <div><b>火力</b>重拳、线炮、钩索都会造成伤害。击退只是附带，用来改写站位、送人进坑或对撞。</div>
+        <div><b>舰核</b>金色舰核就在小队前方，通常只有两格。敌人打上去会扣结构，结构掉光就失败。全灭同样失败。</div>
+        <div><b>红区</b>敌人下一击会亮红。招式各不相同：啃咬、横扫、穿甲、切割梁、酸蚀、曲射、压制……</div>
+        <div><b>航路</b>先打码头缺口，摸清战场记号。之后改装会给出组合技和机制，交易所稍后才会出现。</div>
       </div>
       <div class="row">
-        <button class="primary" id="btn-start">开始教学</button>
-        <button id="btn-skip-tut">跳过教学</button>
+        <button class="primary" id="btn-start">出航</button>
+        <button id="btn-skip-tut">跳过接舷</button>
         <button id="btn-help">作战手册</button>
       </div>
     </div>
@@ -67,8 +70,8 @@ root.innerHTML = `
     <div class="center stack">
       <div class="kicker">MANUAL</div>
       <h2>战场怎么读</h2>
-      <p>金色「舰核」是要守的心脏，打上去会扣顶部结构条。红格是敌人下一击，数字是那一回合结束会塌的地板。青格是移动范围，黄格是技能目标。把鼠标停在任何格子上，右侧「瞄准」会告诉你那是什么。</p>
-      <p>铁腕近推两格，但打不动超重单位那么远。线炮打直线第一个人。补丁默认钩索：拉到身前，贴身则拽到身后；铺路抢回坑和将塌格。有的节点是坚守到撤离窗口，不必杀光。</p>
+      <p>金色「舰核」就在小队前方，通常只有两格，打上去会扣顶部结构。红格是敌人下一击，数字是那一回合结束会塌的地板。青格是移动范围，黄格是技能目标。把指针停在格子上，右侧「瞄准」会写出它是什么、下一击叫什么。</p>
+      <p>铁腕贴身打伤害，附带短距击退。线炮打直线第一个人。补丁用钩索拉近并造成伤害，铺路抢回坑和将塌格。有的节点是坚守到撤离窗口，不必清场。</p>
       <p>1 / 2 / 3 选人 · Q / W 技能 · Z 撤销 · Esc 取消 · 空格结束回合 · M 静音</p>
       <div class="row"><button class="primary" id="btn-help-back">返回</button></div>
     </div>
@@ -80,6 +83,7 @@ root.innerHTML = `
       <p id="brief-text"></p>
       <p class="brief-meta" id="brief-meta"></p>
       <div id="brief-nodes" class="nodes"></div>
+      <div class="cards" id="brief-choices"></div>
       <div class="row">
         <button class="primary" id="btn-brief-go">进入战场</button>
       </div>
@@ -139,7 +143,7 @@ root.innerHTML = `
       </aside>
     </div>
     <div class="keys">
-      <span id="keys-hint">点地移动 · 点敌人出手 · 悬停即预览</span>
+      <span id="keys-hint">点地移动 · 点敌人出手</span>
       <span class="legend">
         <i class="lg-red"></i>将击
         <i class="lg-cyan"></i>可走
@@ -156,7 +160,7 @@ root.innerHTML = `
       <h2>战场冷却</h2>
       <p id="reward-sub"></p>
       <div class="cards" id="reward-cards"></div>
-      <button id="btn-reward-skip">不升级，继续走</button>
+      <button id="btn-reward-skip">放弃改装</button>
     </div>
   </section>
   <section id="sc-shop" class="screen hidden">
@@ -165,7 +169,7 @@ root.innerHTML = `
       <h2>废料交易所</h2>
       <p id="shop-sub"></p>
       <div class="cards" id="shop-cards"></div>
-      <button class="primary" id="btn-shop-leave">离开并回满生命</button>
+      <button class="primary" id="btn-shop-leave">离开交易所</button>
     </div>
   </section>
   <section id="sc-lost" class="screen hidden">
@@ -295,7 +299,13 @@ must("#btn-shop-leave").onclick = () => leaveShop();
 
 function beginRun(skipTut = false): void {
   run = newRun();
-  if (skipTut) run.node = 1;
+  if (skipTut) startMain(run);
+  else {
+    run.tut = true;
+    fillOffers(run);
+    const first = run.offers[0];
+    if (first) selectOffer(run, first);
+  }
   logLines = [];
   goNode();
 }
@@ -303,12 +313,20 @@ function beginRun(skipTut = false): void {
 function skipTutorial(): void {
   if (!battle || !isTutorial(battle)) return;
   afterBattle(run, battle);
-  const r = advance(run);
+  const r = completeCurrent(run);
   if (r === "won") finishWin();
   else goNode();
 }
 
 function goNode(): void {
+  if (!run.current && run.offers.length === 0) fillOffers(run);
+  if (!run.current && run.offers.length > 1) {
+    openRoute();
+    return;
+  }
+  if (!run.current && run.offers.length === 1) {
+    selectOffer(run, run.offers[0]!);
+  }
   const node = currentNode(run);
   if (!node) {
     finishWin();
@@ -325,6 +343,33 @@ function goNode(): void {
   openBrief();
 }
 
+function openRoute(): void {
+  const ch = CHAPTERS[chapterOf(run) - 1];
+  const prog = chapterProgress(run);
+  must("#brief-kicker").textContent = `第 ${chapterOf(run)} 章 · ${ch?.name ?? ""}`;
+  must("#brief-title").textContent = "选择下一处";
+  must("#brief-text").textContent = "先打码头缺口。改装会给出组合技和机制。交易所要再往后。";
+  must("#brief-meta").textContent = `本章进度 ${prog.now} / ${prog.max} · 废料 ${run.scrap}`;
+  must("#brief-nodes").innerHTML = nodeDots();
+  const box = must("#brief-choices");
+  box.innerHTML = "";
+  for (const offer of run.offers) {
+    const btn = document.createElement("button");
+    btn.className = "card";
+    const tag =
+      offer.type === "elite" ? "精英" : offer.type === "shop" ? "交易所" : offer.type === "event" ? "意外" : offer.type === "boss" ? "BOSS" : "战斗";
+    btn.innerHTML = `<b>${offer.title}</b><span>${tag} · ${escapeHtml(offer.blurb)}</span>`;
+    btn.onclick = () => {
+      sfx.ui();
+      selectOffer(run, offer);
+      goNode();
+    };
+    box.appendChild(btn);
+  }
+  must("#btn-brief-go").classList.add("hidden");
+  setScreen("brief");
+}
+
 function openBrief(): void {
   const b = startBattle(run);
   battle = b;
@@ -333,21 +378,23 @@ function openBrief(): void {
   undo = [];
   logLines = [b.briefing];
   const node = currentNode(run);
-  const n = (run.node + 1).toString();
   const ch = CHAPTERS[chapterOf(run) - 1];
-  must("#brief-kicker").textContent = `第 ${chapterOf(run)} 章 · ${ch?.name ?? ""} · ${n}/${CAMPAIGN.length}`;
+  const prog = chapterProgress(run);
+  must("#brief-kicker").textContent = `第 ${chapterOf(run)} 章 · ${ch?.name ?? ""}`;
   must("#brief-title").textContent = b.title;
   must("#brief-text").textContent = b.briefing;
-  must("#brief-meta").textContent = `${node?.type === "boss" ? "BOSS" : node?.type === "elite" ? "精英" : b.objective === "hold" ? "坚守" : "清场"} · 结构 ${b.structure} · ${b.maxTurns} 回合${b.spreading ? " · 崩塌蔓延" : ""}`;
+  must("#brief-meta").textContent = `${node?.type === "boss" ? "BOSS" : node?.type === "elite" ? "精英" : b.objective === "hold" ? "坚守" : "清场"} · 结构 ${b.structure} · ${b.maxTurns} 回合${b.spreading ? " · 崩塌蔓延" : ""} · ${prog.now}/${prog.max}`;
   must("#brief-nodes").innerHTML = nodeDots();
+  must("#brief-choices").innerHTML = "";
+  must("#btn-brief-go").classList.remove("hidden");
   setScreen("brief");
 }
 
 function nodeDots(): string {
-  return CAMPAIGN.map((n, i) => {
-    const cls = i === run.node ? "now" : i < run.node ? "on" : "";
-    const title = n.missionId ?? n.eventId ?? n.type;
-    return `<i class="${cls}" title="${title}"></i>`;
+  const prog = chapterProgress(run);
+  return Array.from({ length: prog.max }, (_, i) => {
+    const cls = i < prog.now ? "on" : i === prog.now ? "now" : "";
+    return `<i class="${cls}"></i>`;
   }).join("");
 }
 
@@ -355,7 +402,7 @@ function openEvent(): void {
   const node = currentNode(run);
   const ev = eventById(node?.eventId ?? "");
   if (!ev) {
-    const r = advance(run);
+    const r = completeCurrent(run);
     if (r === "won") finishWin();
     else goNode();
     return;
@@ -375,7 +422,7 @@ function openEvent(): void {
         return;
       }
       sfx.ui();
-      const r = advance(run);
+      const r = completeCurrent(run);
       if (r === "won") finishWin();
       else goNode();
     };
@@ -405,14 +452,25 @@ function fitBoard(): void {
 }
 
 function openShop(): void {
-  healShop(run);
   const cost = shopCost(run);
   const choices = shopChoices(run);
-  must("#shop-sub").textContent = `废料 ${run.scrap} · 每件 ${cost} · 生命已回满`;
+  must("#shop-sub").textContent = `废料 ${run.scrap} · 改装每件 ${cost} · 接合 8 废料`;
   const box = must("#shop-cards");
   box.innerHTML = "";
+  const repair = document.createElement("button");
+  repair.className = "card";
+  repair.innerHTML = `<b>紧急接合</b><span>全体生命回满 · 8 废料</span>`;
+  repair.disabled = run.scrap < 8;
+  repair.onclick = () => {
+    if (!buyRepair(run, 8)) return;
+    sfx.ui();
+    openShop();
+  };
+  box.appendChild(repair);
   if (choices.length === 0) {
-    box.textContent = "货架空了。";
+    const empty = document.createElement("div");
+    empty.textContent = "改装货架空了。";
+    box.appendChild(empty);
   }
   for (const id of choices) {
     const r = relicById(id);
@@ -433,7 +491,7 @@ function openShop(): void {
 
 function leaveShop(): void {
   sfx.ui();
-  const r = advance(run);
+  const r = completeCurrent(run);
   if (r === "won") finishWin();
   else goNode();
 }
@@ -444,16 +502,28 @@ function openReward(b: Battle): void {
   box.innerHTML = "";
   const choices = rewardChoices(run);
   if (choices.length === 0) {
-    box.textContent = "升级已满。";
+    box.textContent = "改装已满。";
   }
-  for (const id of choices) {
-    const u = upgradeById(id);
-    if (!u) continue;
+  for (const pick of choices) {
+    const item = pick.kind === "upgrade" ? upgradeById(pick.id) : relicById(pick.id);
+    if (!item) continue;
+    const tag =
+      pick.kind === "relic"
+        ? "遗物"
+        : "kind" in item && item.kind === "combo"
+          ? "组合技"
+          : "kind" in item && item.kind === "mech"
+            ? "机制"
+            : "改装";
     const btn = document.createElement("button");
     btn.className = "card";
-    btn.innerHTML = `<b>${u.name}</b><span>${u.desc}</span>`;
+    btn.innerHTML = `<b>${item.name}</b><span>${tag} · ${item.desc}</span>`;
     btn.onclick = () => {
-      applyUpgrade(run, id);
+      if (pick.kind === "upgrade") applyUpgrade(run, pick.id);
+      else {
+        if (run.relics.includes(pick.id)) return;
+        run.relics.push(pick.id);
+      }
       sfx.ui();
       afterReward();
     };
@@ -463,7 +533,7 @@ function openReward(b: Battle): void {
 }
 
 function afterReward(): void {
-  const r = advance(run);
+  const r = completeCurrent(run);
   if (r === "won") finishWin();
   else goNode();
 }
@@ -487,7 +557,7 @@ function requestDraw(): void {
 function refreshSide(): void {
   if (!battle) return;
   const b = battle;
-  must("#hud-mission").textContent = isTutorial(b) ? "教学关" : `${CHAPTERS[b.chapter - 1]?.name ?? ""} · ${b.title}`;
+  must("#hud-mission").textContent = `${CHAPTERS[b.chapter - 1]?.name ?? ""} · ${b.title}`;
   must("#hud-nodes").innerHTML = nodeDots();
   must("#hud-turn").textContent = `${b.turn} / ${b.maxTurns}`;
   const st = must("#hud-struct");
@@ -508,8 +578,9 @@ function refreshSide(): void {
     const d = document.createElement("div");
     d.className = "pilot" + (u.id === selected ? " on" : "");
     const pct = Math.max(0, (u.hp / u.maxHp) * 100);
-    const mv = u.hp <= 0 ? "已倒下" : u.moved ? "已移动" : "可移动";
-    const ac = u.hp <= 0 ? "" : u.acted ? "已行动" : "可行动";
+    const stun = u.stunned ? "压制中" : "";
+    const mv = u.hp <= 0 ? "已倒下" : stun || (u.moved ? "已移动" : "可移动");
+    const ac = u.hp <= 0 ? "" : stun || (u.acted ? "已行动" : "可行动");
     d.innerHTML = `<div class="nm">${u.name}<span>${u.hp}/${u.maxHp}</span></div>
       <div class="bar"><i style="width:${pct}%"></i></div>
       <div class="pips-act"><span class="${u.moved ? "" : "on"}">${mv}</span><span class="${u.acted ? "" : "on"}">${ac}</span></div>`;
@@ -575,10 +646,10 @@ function refreshCoach(): void {
   }
   el.classList.remove("hidden");
   el.dataset.color = hint.color;
-  must("#coach-step").textContent = hint.dismissOnly ? "战场说明" : `教学 ${hint.step} / ${hint.total}`;
+  must("#coach-step").textContent = hint.dismissOnly ? "战场说明" : `调度 ${hint.step} / ${hint.total}`;
   must("#coach-title").textContent = hint.title;
   must("#coach-body").textContent = hint.body;
-  must("#btn-coach-skip").textContent = hint.dismissOnly ? "知道了" : "跳过教学";
+  must("#btn-coach-skip").textContent = hint.dismissOnly ? "收到" : "切断频道";
   const end = must<HTMLButtonElement>("#btn-end");
   if (!hint.dismissOnly) end.disabled = !hint.allowEnd;
 }
@@ -649,7 +720,7 @@ function tryEndTurn(): void {
   if (battle && isTutorial(battle)) {
     const hint = tutorialCoach(battle, selected, hover);
     if (hint && !hint.allowEnd) {
-      showErr("先按教练说的做完这一步。");
+      showErr("调度还在等铁腕完成当前动作。");
       sfx.ui();
       return;
     }
@@ -678,9 +749,9 @@ function playEvents(events: Ev[]): void {
       view.burst(ev.x, ev.y, "#6aa0c8", 14);
       view.shake(3);
     }
-    if (ev.t === "hit" && ev.dmg) {
+    if (ev.t === "hit" && ev.dmg > 0 && (ev.id || ev.core)) {
       sfx.hit();
-      view.float(ev.x, ev.y, `-${ev.dmg}`, "#ffd0cc");
+      view.float(ev.x, ev.y, `-${ev.dmg}`, ev.core ? "#ffe08a" : "#ffd0cc");
     }
     if (ev.t === "move") sfx.move();
     if (ev.t === "log" && (ev.s.includes("铁拳") || ev.s.includes("线炮") || ev.s.includes("钩索") || ev.s.includes("铺回") || ev.s.includes("震地"))) {
@@ -848,9 +919,9 @@ function hoverHint(): string {
     const p = previewAction(battle, act);
     const fall = p?.events.some((e) => e.t === "fall");
     const chain = p?.events.find((e) => e.t === "chain");
-    if (fall) return "预览：有人会掉进深渊";
-    if (chain && chain.t === "chain") return `预览：连锁 × ${chain.n}`;
-    return "预览：技能将立刻结算";
+    if (fall) return "有人会掉进深渊";
+    if (chain && chain.t === "chain") return `连锁 × ${chain.n}`;
+    return "技能将立刻结算";
   }
   if (act && act.type === "move") return "移动到这里";
   if (skill) return "点黄格释放，右键取消";

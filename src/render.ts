@@ -142,8 +142,14 @@ export function loadArt(): Promise<void> {
     "turret",
     "leaper",
     "warden",
+    "etcher",
+    "sniper",
+    "mortar",
+    "grappler",
+    "brood",
+    "bully",
   ];
-  return Promise.all([
+  return Promise.allSettled([
     ...tiles.map((k) =>
       loadImg(`${BASE}assets/tile-${k}.png`).then((im) => {
         atlas[`tile-${k}`] =
@@ -161,9 +167,6 @@ export function loadArt(): Promise<void> {
   ])
     .then(() => {
       artReady = true;
-    })
-    .catch(() => {
-      artReady = false;
     });
 }
 
@@ -653,11 +656,30 @@ function drawTile(
     c.fillStyle = `rgba(255,120,40,${0.35 + Math.sin(pulse * 3 + x) * 0.1})`;
     c.fillRect(px + 8, py + 8, s - 16, s - 16);
   }
+  if (t.acid > 0) {
+    c.fillStyle = `rgba(120,220,80,${0.28 + Math.sin(pulse * 2.4 + y) * 0.08})`;
+    c.fillRect(px + 6, py + 6, s - 12, s - 12);
+  }
 }
+
+const UNIT_ALIAS: Record<string, string> = {
+  etcher: "beetle",
+  sniper: "gunner",
+  mortar: "turret",
+  grappler: "leaper",
+  brood: "brute",
+  bully: "hammer",
+};
 
 function unitKey(u: Unit): string {
   if (u.pilot) return `unit-${u.pilot}`;
-  if (u.enemy) return `unit-${u.enemy}`;
+  if (u.enemy) {
+    const key = `unit-${u.enemy}`;
+    if (atlas[key]) return key;
+    const alias = UNIT_ALIAS[u.enemy];
+    if (alias) return `unit-${alias}`;
+    return key;
+  }
   return "unit-beetle";
 }
 

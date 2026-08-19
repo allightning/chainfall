@@ -11,6 +11,7 @@ import {
 } from "./sim";
 import { inspectTile } from "./inspect";
 import type { Battle } from "./types";
+import { fillOffers, newRun, rewardChoices, startMain, upgradeById } from "./run";
 
 function battleOf(id: string): Battle {
   const m = MISSIONS.find((x) => x.id === id);
@@ -38,6 +39,38 @@ function assertSane(b: Battle): void {
   expect(b.structure).toBeGreaterThanOrEqual(0);
 }
 
+describe("航路", () => {
+  it("第一章第一战固定码头缺口", () => {
+    const run = newRun(7);
+    startMain(run);
+    expect(run.offers).toHaveLength(1);
+    expect(run.offers[0]?.missionId).toBe("c1-1");
+  });
+
+  it("码头缺口之后仍是战斗而不是交易所", () => {
+    const run = newRun(7);
+    startMain(run);
+    run.fightsDone = 1;
+    run.usedMissions = ["c1-1"];
+    fillOffers(run);
+    expect(run.offers.some((o) => o.type === "shop" || o.type === "event")).toBe(false);
+    expect(run.offers.every((o) => o.type === "fight")).toBe(true);
+  });
+});
+
+describe("战后改装", () => {
+  it("三选一必出组合技和机制", () => {
+    const run = newRun(3);
+    run.tut = false;
+    run.wins = 1;
+    const picks = rewardChoices(run);
+    expect(picks).toHaveLength(3);
+    const kinds = picks.map((p) => (p.kind === "upgrade" ? upgradeById(p.id)?.kind : "relic"));
+    expect(kinds).toContain("combo");
+    expect(kinds).toContain("mech");
+  });
+});
+
 describe("关卡都能开局", () => {
   it("全部地图可创建且意图合法", () => {
     for (const m of MISSIONS) {
@@ -58,7 +91,28 @@ describe("击退", () => {
       kind: "fight",
       title: "t",
       briefing: "",
-      map: `..#.....\n........\n........\n........\n........\n........\n........\n........`,
+      map: `.#......\n........\n........\n........\n........\n........\n........\n........`,
+      pilots: [{ x: 1, y: 2 }, { x: 4, y: 2 }, { x: 6, y: 2 }],
+      enemies: [{ kind: "gunner", x: 1, y: 1 }],
+      structure: 4,
+      maxTurns: 8,
+    };
+    const b = createBattle(m, defaultPilots(), []);
+    const gunner = b.units.find((u) => u.enemy === "gunner")!;
+    const ev = applySkill(b, "iron", "punch", 1, 1);
+    expect(ev).toBeTruthy();
+    expect(gunner.hp).toBe(0);
+    assertSane(b);
+  });
+
+  it("重拳先结算伤害", () => {
+    const m: Mission = {
+      id: "t-dmg",
+      chapter: 1,
+      kind: "fight",
+      title: "t",
+      briefing: "",
+      map: `........\n........\n........\n........\n........\n........\n........\n........`,
       pilots: [{ x: 2, y: 2 }, { x: 4, y: 2 }, { x: 6, y: 2 }],
       enemies: [{ kind: "beetle", x: 2, y: 1 }],
       structure: 4,
@@ -66,6 +120,7 @@ describe("击退", () => {
     };
     const b = createBattle(m, defaultPilots(), []);
     const beetle = b.units.find((u) => u.enemy === "beetle")!;
+    expect(beetle.hp).toBe(2);
     const ev = applySkill(b, "iron", "punch", 2, 1);
     expect(ev).toBeTruthy();
     expect(beetle.hp).toBe(0);
@@ -124,7 +179,7 @@ describe("回合结束", () => {
 });
 
 describe("教学关", () => {
-  it("铁腕从西侧一拳把甲虫推进坑", () => {
+  it("铁腕从西侧一拳打死甲虫", () => {
     const b = battleOf("tut-1");
     const iron = b.units.find((u) => u.id === "iron")!;
     expect(iron.x).toBe(1);
@@ -136,6 +191,49 @@ describe("教学关", () => {
     const beetle = b.units.find((u) => u.enemy === "beetle")!;
     expect(beetle.hp).toBe(0);
     expect(b.outcome).toBe("won");
+  });
+});
+
+describe("线炮", () => {
+  it("可以隔着深渊打到对面", () => {
+    const m: Mission = {
+      id: "t-cannon-void",
+      chapter: 1,
+      kind: "fight",
+      title: "t",
+      briefing: "",
+      map: `........\n.#......\n........\n........\n........\n........\n........\n........`,
+      pilots: [{ x: 0, y: 6 }, { x: 1, y: 3 }, { x: 3, y: 6 }],
+      enemies: [{ kind: "beetle", x: 1, y: 0 }],
+      structure: 4,
+      maxTurns: 8,
+    };
+    const b = createBattle(m, defaultPilots(), []);
+    const beetle = b.units.find((u) => u.enemy === "beetle")!;
+    const ev = applySkill(b, "line", "cannon", 1, 0);
+    expect(ev).toBeTruthy();
+    expect(beetle.hp).toBe(0);
+    assertSane(b);
+  });
+
+  it("路障仍然挡住线炮", () => {
+    const m: Mission = {
+      id: "t-cannon-block",
+      chapter: 1,
+      kind: "fight",
+      title: "t",
+      briefing: "",
+      map: `........\n.X......\n........\n........\n........\n........\n........\n........`,
+      pilots: [{ x: 0, y: 6 }, { x: 1, y: 3 }, { x: 3, y: 6 }],
+      enemies: [{ kind: "beetle", x: 1, y: 0 }],
+      structure: 4,
+      maxTurns: 8,
+    };
+    const b = createBattle(m, defaultPilots(), []);
+    const ev = applySkill(b, "line", "cannon", 1, 0);
+    expect(ev).toBeNull();
+    const beetle = b.units.find((u) => u.enemy === "beetle")!;
+    expect(beetle.hp).toBe(2);
   });
 });
 
@@ -235,18 +333,18 @@ describe("功能格", () => {
       briefing: "",
       map: `........\n...X....\n........\n........\n........\n........\n........\n........`,
       pilots: [{ x: 3, y: 3 }, { x: 0, y: 0 }, { x: 1, y: 0 }],
-      enemies: [{ kind: "beetle", x: 3, y: 2 }],
+      enemies: [{ kind: "gunner", x: 3, y: 2 }],
       structure: 4,
       maxTurns: 8,
     };
     const b = createBattle(m, defaultPilots(), []);
-    const beetle = b.units.find((u) => u.enemy === "beetle")!;
-    const hp = beetle.hp;
+    const gunner = b.units.find((u) => u.enemy === "gunner")!;
+    const hp = gunner.hp;
     const ev = applySkill(b, "iron", "punch", 3, 2);
     expect(ev).toBeTruthy();
-    expect(beetle.hp).toBe(hp - 1);
-    expect(beetle.x).toBe(3);
-    expect(beetle.y).toBe(2);
+    expect(gunner.hp).toBe(hp - 3);
+    expect(gunner.x).toBe(3);
+    expect(gunner.y).toBe(2);
     expect(tile(b, 3, 1)?.kind).toBe("block");
     assertSane(b);
   });
@@ -270,6 +368,20 @@ describe("功能格", () => {
     expect(turret.hp).toBeGreaterThan(0);
     expect(turret.x).toBe(3);
     expect(turret.y).toBe(2);
+    assertSane(b);
+  });
+
+  it("码头缺口传送带上的敌人回合结束会离开原格", () => {
+    const b = battleOf("c1-1");
+    const onBelt = b.units.filter((u) => u.team === "enemy" && tile(b, u.x, u.y)?.kind === "belt");
+    expect(onBelt.length).toBeGreaterThan(0);
+    const before = onBelt.map((u) => ({ id: u.id, x: u.x, y: u.y }));
+    endTurn(b);
+    for (const p of before) {
+      const u = b.units.find((x) => x.id === p.id);
+      if (!u || u.hp <= 0) continue;
+      expect(u.x !== p.x || u.y !== p.y, `${u.name} 仍停在传送带原格`).toBe(true);
+    }
     assertSane(b);
   });
 
@@ -300,7 +412,13 @@ describe("功能格", () => {
 describe("瞄准说明", () => {
   it("舰核和功能格有名字", () => {
     const b = battleOf("c1-1");
-    const core = inspectTile(b, { x: 3, y: 5 });
+    let corePos = { x: 0, y: 0 };
+    for (let y = 0; y < b.h; y++) {
+      for (let x = 0; x < b.w; x++) {
+        if (b.tiles[y * b.w + x].core) corePos = { x, y };
+      }
+    }
+    const core = inspectTile(b, corePos);
     expect(core.title).toBe("舰核");
     const belt = inspectTile(b, { x: 5, y: 2 });
     expect(belt.title).toContain("传送带");
@@ -308,5 +426,115 @@ describe("瞄准说明", () => {
     expect(block.title).toBe("路障");
     const repair = inspectTile(b, { x: 6, y: 6 });
     expect(repair.title).toBe("维修垫");
+  });
+});
+
+describe("敌方招式", () => {
+  it("十三种敌人各有独立出手", () => {
+    const expected: [Mission["enemies"][0]["kind"], string][] = [
+      ["beetle", "melee"],
+      ["brute", "cleave"],
+      ["hammer", "smash"],
+      ["gunner", "shot"],
+      ["sniper", "pierce"],
+      ["demo", "beam"],
+      ["bomber", "burst"],
+      ["etcher", "acid"],
+      ["mortar", "mortar"],
+      ["grappler", "pull"],
+      ["bully", "shove"],
+      ["brood", "spawn"],
+      ["warden", "lock"],
+    ];
+    const seen = new Set<string>();
+    for (const [kind, intent] of expected) {
+      const m: Mission = {
+        id: `t-${kind}`,
+        chapter: 1,
+        kind: "fight",
+        title: "t",
+        briefing: "",
+        map: `........\n........\n........\n...C....\n........\n........\n........\n........`,
+        pilots: [{ x: 1, y: 6 }, { x: 3, y: 6 }, { x: 5, y: 6 }],
+        enemies: [{ kind, x: 3, y: 1 }],
+        structure: 6,
+        maxTurns: 8,
+      };
+      const b = createBattle(m, defaultPilots(), []);
+      expect(b.intents.length).toBe(1);
+      expect(b.intents[0].kind).toBe(intent);
+      seen.add(b.intents[0].kind);
+      assertSane(b);
+    }
+    expect(seen.size).toBe(13);
+  });
+
+  it("拆楼机切割梁不超过五格", () => {
+    const b = battleOf("c1-boss");
+    const demo = b.intents.find((i) => i.kind === "beam");
+    expect(demo).toBeTruthy();
+    expect(demo!.tiles.length).toBeLessThanOrEqual(5);
+    expect(demo!.tiles.length).toBeGreaterThan(0);
+  });
+});
+
+describe("舰核布置", () => {
+  it("核心更少且在下半场", () => {
+    const b = battleOf("c1-1");
+    const cores: { x: number; y: number }[] = [];
+    for (let y = 0; y < b.h; y++) {
+      for (let x = 0; x < b.w; x++) {
+        if (b.tiles[y * b.w + x].core) cores.push({ x, y });
+      }
+    }
+    expect(cores.length).toBeGreaterThan(0);
+    expect(cores.length).toBeLessThanOrEqual(2);
+    for (const c of cores) expect(c.y).toBeGreaterThanOrEqual(Math.floor(b.h / 2));
+  });
+});
+
+describe("组合技", () => {
+  it("破甲协同会在线炮上引爆", () => {
+    const m: Mission = {
+      id: "t-mark",
+      chapter: 1,
+      kind: "fight",
+      title: "t",
+      briefing: "",
+      map: `........\n........\n....X...\n........\n........\n........\n........\n........`,
+      pilots: [{ x: 4, y: 4 }, { x: 0, y: 3 }, { x: 7, y: 7 }],
+      enemies: [{ kind: "gunner", x: 4, y: 3 }],
+      structure: 6,
+      maxTurns: 8,
+    };
+    const b = createBattle(m, defaultPilots(), [], ["markcombo"]);
+    const gunner = b.units.find((u) => u.enemy === "gunner")!;
+    expect(applySkill(b, "iron", "punch", 4, 3)).toBeTruthy();
+    expect(gunner.marked).toBe(true);
+    expect(gunner.x).toBe(4);
+    expect(gunner.y).toBe(3);
+    expect(applySkill(b, "line", "cannon", 4, 3)).toBeTruthy();
+    expect(gunner.hp).toBe(0);
+    assertSane(b);
+  });
+
+  it("击杀连射让线炮再动", () => {
+    const m: Mission = {
+      id: "t-volley",
+      chapter: 1,
+      kind: "fight",
+      title: "t",
+      briefing: "",
+      map: `........\n........\n........\n........\n........\n........\n........\n........`,
+      pilots: [{ x: 0, y: 7 }, { x: 2, y: 4 }, { x: 7, y: 7 }],
+      enemies: [{ kind: "beetle", x: 2, y: 1 }],
+      structure: 6,
+      maxTurns: 8,
+    };
+    const b = createBattle(m, defaultPilots(), [], ["volley"]);
+    expect(applySkill(b, "line", "cannon", 2, 1)).toBeTruthy();
+    const line = b.units.find((u) => u.id === "line")!;
+    expect(line.acted).toBe(false);
+    expect(b.units.find((u) => u.enemy === "beetle")!.hp).toBe(0);
   });
 });
